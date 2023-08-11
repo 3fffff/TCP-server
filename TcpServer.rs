@@ -1,56 +1,51 @@
-use polling::{Event, Poller};
-use std::cell::Cell;
 use std::collections::HashMap;
+use std::error::Error;
 use std::io::{prelude::*, ErrorKind};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::rc::Rc;
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::{ptr, task};
 
 /*type ClientConnected = fn(param:str,param1:bool);
 type ClientDisconnected = fn(param:str,param1:bool);
 type DataReceived = fn(param:str,param1:vec,param2:bool);*/
 
 struct ClientData {
-    tcpClient: SocketAddr,
+    tcp_client: SocketAddr,
     stream: TcpStream,
 }
 
 struct TcpServer {
-    receiveBufferSize: u16,
-    listenerIp: u16,
+    receive_buffer_size: u16,
+    listener_ip: String,
     port: u16,
-    clients: HashMap<String, Arc<Mutex<ClientData>>>,
+    clients: Arc<Mutex<HashMap<String, ClientData>>>,
     listener: TcpListener,
     running: bool,
     logging: bool,
 }
 
 impl TcpServer {
-    fn new(ip: &str, port: u16) -> Self {
+    fn new(ip: &str, port: u16,listener:TcpListener) -> Self {
         Self {
-            receiveBufferSize: 4096,
-            listenerIp: ip,
+            receive_buffer_size: 4096,
+            listener_ip: ip.to_string(),
             port: port,
-            clients: HashMap::new(),
-            listener: None,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            listener: listener,
             running: false,
             logging: true,
         }
     }
 
-    fn get_client(&self, ipPort: &str) -> ClientData {
-        return &*self.clients[ipPort];
+    fn get_client(&self, ip_port: &str) -> ClientData {
+        return self.clients.lock().unwrap()[ip_port];
     }
 
-    fn add_client(&mut self, ipPort: String, client: ClientData) {
-        self.clients.insert(ipPort, Arc::new(Mutex::new(client)));
+    fn add_client(&mut self, ip_port: String, client: ClientData) {
+        self.clients.lock().unwrap().insert(ip_port, client);
     }
 
-    fn remove_client(&mut self, ipPort: &str) {
-        self.clients.remove(ipPort);
+    fn remove_client(&mut self, ip_port: &str) {
+        self.clients.lock().unwrap().remove(ip_port);
     }
 
     fn start(&self) {
@@ -59,7 +54,7 @@ impl TcpServer {
             return;
         }
         self.running = true;
-        self.listener = TcpListener::bind(self.listenerIp + ":" + self.port).unwrap();
+        self.listener = TcpListener::bind((self.listener_ip + ":" + &self.port.to_string()).to_string()).unwrap();
 
         self.listener.set_nonblocking(true);
 
@@ -67,11 +62,12 @@ impl TcpServer {
     }
 
     // Asynchronously send data to the specified client by IP:port.
-    async fn send(&self, ipPort: &str, data: Vec) {
-        let client = self.get_client(ipPort);
+    async fn send(&self, ip_port: &str, data: Vec<u8>) {
+        let mut client = self.get_client(ip_port);
+        let mut buffer = vec![0u8;self.receive_buffer_size as usize];
 
-        client.NetworkStream.Write(data, 0, data.Length);
-        client.NetworkStream.Flush();
+        client.stream.write(&mut buffer);
+        client.stream.flush();
     }
 
     fn Log(&self, msg: &str) {
@@ -81,25 +77,25 @@ impl TcpServer {
     }
 
     async fn accept_connections(&self) -> Result<(), Box<dyn Error>> {
-        let (stream, tcpClient) = self.listener.accept().unwrap();
-        let clientData: ClientData = ClientData {
-            tcpClient,
-            stream
-        };
+        match self.listener.accept() {
+            (stream, tcp_client) => {
+                let client_data: ClientData = ClientData { tcp_client, stream };
 
-        self.add_client(clientIp, clientMetadata);
-        self.Log(
-            "Connection established. Starting data receiver [" + tcpClient.ip().to_string() + "]",
-        );
-        if (ClientConnected != null) {
-            task::spawn(self.client_connected(clientIp));
+                self.add_client(client_data.tcp_client.ip().to_string(), client_data);
+                self.Log(
+                    "Connection established. Starting data receiver ["
+                        + tcp_client.ip().to_string()
+                        + "]",
+                );
+                Ok(())
+            },
+            None =>  Err("connection not established")
         }
-        Ok(())
     }
 
-    fn is_client_connected(&self, client: ClientData) -> bool {
+    fn is_client_connected(client: &mut ClientData) -> bool {
         let mut buffer = [0; 1024];
-        match client.NetworkStream.read(&mut buffer) {
+        match client.stream.read(&mut buffer) {
             Ok(bytes_read) => {
                 println!("Read {:?}", &buffer[..bytes_read]);
                 return true;
@@ -116,16 +112,16 @@ impl TcpServer {
     }
 
     async fn data_receiver(&self, client: ClientData) {
-        loop{
-            if !self.is_client_connected(client) {
+        loop {
+            if !TcpServer::is_client_connected(&mut client) {
                 break;
             }
             //
         }
-        self.remove_client(client.TcpClient.Client.RemoteEndPoint.ToString());
+        self.remove_client(&client.tcp_client.ip().to_string());
         self.Log(
-            "[" + client.TcpClient.Client.RemoteEndPoint.ToString()
-                + "] DataReceiver disconnect detected",
+            ("[" + &client.tcp_client.ip().to_string()
+                + "] DataReceiver disconnect detected").to_string(),
         );
     }
 }
