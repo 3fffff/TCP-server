@@ -8,12 +8,21 @@ use std::sync::{Arc, Mutex};
 type ClientDisconnected = fn(param:str,param1:bool);
 type DataReceived = fn(param:str,param1:vec,param2:bool);*/
 
+type SocketData = (u64, TcpStream);
+type EventSender = Arc<Mutex<Option<Sender<ServerEvent>>>>;
+
+#[allow(dead_code)]
+pub enum ServerEvent {
+    None,
+    Disconnection(SocketAddr),
+}
+
 struct ClientData {
     tcp_client: SocketAddr,
     stream: TcpStream,
 }
 
-struct TcpServer {
+struct TcpServer<T: Clone + Send + 'static> {
     receive_buffer_size: u16,
     listener_ip: String,
     port: u16,
@@ -21,10 +30,11 @@ struct TcpServer {
     listener: TcpListener,
     running: bool,
     logging: bool,
+    event_sender: EventSender,
 }
 
 impl TcpServer {
-    fn new(ip: &str, port: u16,listener:TcpListener) -> Self {
+    fn new(ip: &str, port: u16, listener: TcpListener) -> Self {
         Self {
             receive_buffer_size: 4096,
             listener_ip: ip.to_string(),
@@ -54,7 +64,9 @@ impl TcpServer {
             return;
         }
         self.running = true;
-        self.listener = TcpListener::bind((self.listener_ip + ":" + &self.port.to_string()).to_string()).unwrap();
+        self.listener =
+            TcpListener::bind((self.listener_ip + ":" + &self.port.to_string()).to_string())
+                .unwrap();
 
         self.listener.set_nonblocking(true);
 
@@ -64,7 +76,7 @@ impl TcpServer {
     // Asynchronously send data to the specified client by IP:port.
     async fn send(&self, ip_port: &str, data: Vec<u8>) {
         let mut client = self.get_client(ip_port);
-        let mut buffer = vec![0u8;self.receive_buffer_size as usize];
+        let mut buffer = vec![0u8; self.receive_buffer_size as usize];
 
         client.stream.write(&mut buffer);
         client.stream.flush();
@@ -88,8 +100,8 @@ impl TcpServer {
                         + "]",
                 );
                 Ok(())
-            },
-            None =>  Err("connection not established")
+            }
+            None => Err("connection not established"),
         }
     }
 
@@ -120,8 +132,8 @@ impl TcpServer {
         }
         self.remove_client(&client.tcp_client.ip().to_string());
         self.Log(
-            ("[" + &client.tcp_client.ip().to_string()
-                + "] DataReceiver disconnect detected").to_string(),
+            ("[" + &client.tcp_client.ip().to_string() + "] DataReceiver disconnect detected")
+                .to_string(),
         );
     }
 }
