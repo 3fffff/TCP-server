@@ -1,12 +1,17 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::{prelude::*, ErrorKind};
+use std::io::{self, prelude::*, ErrorKind};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-type SocketData = (u64, TcpStream);
+type SocketData = (String, TcpStream);
 type EventSender = Arc<Mutex<Option<Sender<ServerEvent>>>>;
+
+/// Data that is sent to user provided FnMut `set in fn start` when a client connects to a
+/// started(fn start) server
+pub type HandleClientType<'a, T> = (&'a mut TcpStream, Option<T>, &'a mut TcpServer<T>);
 
 #[allow(dead_code)]
 pub enum ServerEvent {
@@ -20,41 +25,54 @@ struct ClientData {
 }
 
 #[derive(Clone)]
-struct TcpServer<T: Clone + Send + 'static> {
+pub struct TcpServer<T: Clone + Send + 'static> {
     receive_buffer_size: u16,
-    listener_ip: String,
-    port: u16,
+    listener_ip: Arc<String>,
     clients: Arc<Mutex<HashMap<String, ClientData>>>,
-    listener: TcpListener,
     running: bool,
     logging: bool,
     event_sender: EventSender,
+    handle_type:Option<T>
 }
 
-impl<T> TcpServer<T> where T: Clone + Send + 'static {
-    fn new(ip: &str, port: u16, listener: TcpListener) -> Self {
+impl<T> TcpServer<T>
+where
+    T: Clone + Send + 'static,
+{
+    pub fn new(ip: &str, port: u16) -> Self {
         TcpServer::<T> {
             receive_buffer_size: 4096,
-            listener_ip: ip.to_string(),
-            port: port,
+            listener_ip: Arc::new("127.0.0.1:3000".to_string()),
             clients: Arc::new(Mutex::new(HashMap::new())),
-            listener: listener,
             running: false,
             logging: true,
-            event_sender: todo!(),
+            event_sender: Default::default(),
+            handle_type: Default::default(),
         }
     }
 
-    fn get_client(&self, ip_port: &str) -> ClientData {
-        return self.clients.lock().unwrap()[ip_port];
+    fn get_client(&self, ip_port: &str) -> Arc<ClientData> {
+        return Arc::new(self.clients.lock().unwrap()[ip_port]);
     }
 
-    fn add_client(&mut self, ip_port: String, client: ClientData) {
+    fn add_client(&mut self, ip_port: String, client: ClientData) -> io::Result<()> {
         self.clients.lock().unwrap().insert(ip_port, client);
+        Ok(())
     }
 
-    fn remove_client(&mut self, ip_port: &str) {
+    fn remove_client(&mut self, ip_port: &str) -> io::Result<()> {
         self.clients.lock().unwrap().remove(ip_port);
+        Ok(())
+    }
+
+    fn send_event(&self, event: ServerEvent) {
+        let sender = self.event_sender.as_ref();
+
+        if let Some(sender) = &*sender.lock().unwrap() {
+            sender
+                .send(event)
+                .unwrap_or_else(|e| println!("error sending to error_sender {}", e));
+        }
     }
 
     fn start(&self) {
@@ -63,33 +81,12 @@ impl<T> TcpServer<T> where T: Clone + Send + 'static {
             return;
         }
         self.running = true;
-        self.listener =
-            TcpListener::bind((self.listener_ip + ":" + &self.port.to_string()).to_string())
-                .unwrap();
+        let listener = TcpListener::bind(&*self.listener_ip).unwrap();
 
-        self.listener.set_nonblocking(true);
+        listener.set_nonblocking(true);
 
-        self.accept_connections();
-    }
-
-    // Asynchronously send data to the specified client by IP:port.
-    async fn send(&self, ip_port: &str, data: Vec<u8>) {
-        let mut client = self.get_client(ip_port);
-        let mut buffer = vec![0u8; self.receive_buffer_size as usize];
-
-        client.stream.write(&mut buffer);
-        client.stream.flush();
-    }
-
-    fn log(&self, msg: &str) {
-        if self.logging {
-            println!("{}", msg);
-        }
-    }
-
-    async fn accept_connections(&self) -> Result<(), Box<dyn Error>> {
-        match self.listener.accept() {
-            (stream, tcp_client) => {
+        match listener.accept() {
+            Ok((stream, tcp_client)) => {
                 let client_data: ClientData = ClientData { tcp_client, stream };
 
                 self.add_client(client_data.tcp_client.ip().to_string(), client_data);
@@ -102,6 +99,45 @@ impl<T> TcpServer<T> where T: Clone + Send + 'static {
             }
             None => Err("connection not established"),
         }
+    }
+
+    fn log(&self, msg: &str) {
+        if self.logging {
+            println!("{}", msg);
+        }
+    }
+
+    /// Runs the user's defined function in a new thread passing in the newly connected socket.
+    fn handle_client(
+        &mut self,
+        socket_data: (String, &mut TcpStream),
+        handle_client: impl Fn(HandleClientType<T>) + Send + 'static,
+    ) -> io::Result<()> {
+        let (index, socket) = socket_data;
+        let mut socket = socket.try_clone()?;
+        let mut _self = self.clone();
+        thread::spawn(move || {
+            handle_client((&mut socket, _self.handle_type.clone(), &mut _self));
+            _self
+                .handle_socket_disconnection(&(index, socket))
+                .unwrap_or_else(|why| {
+                    panic!("Error in handling socket disconnection, Err: '{}' ", why);
+                });
+        });
+        Ok(())
+    }
+
+    fn handle_socket_disconnection(&self, socket_data: &SocketData) -> io::Result<()> {
+        let (index, socket) = socket_data;
+
+        //Remove socket from clients list
+        self.remove_client(&index)?;
+        let sock_addr = socket.peer_addr().unwrap();
+
+        self.send_event(ServerEvent::Disconnection(sock_addr));
+
+        debug!("Removed client {}, at index {}", sock_addr, index);
+        Ok(())
     }
 
     fn is_client_connected(client: &mut ClientData) -> bool {
@@ -127,7 +163,6 @@ impl<T> TcpServer<T> where T: Clone + Send + 'static {
             if !TcpServer::is_client_connected(&mut client) {
                 break;
             }
-            //
         }
         self.remove_client(&client.tcp_client.ip().to_string());
         self.log(
