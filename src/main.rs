@@ -1,3 +1,5 @@
+mod TcpServer;
+
 fn main() {
-    println!("Hello, world!");
+    let server = TcpServer::new();
 }

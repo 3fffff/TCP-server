@@ -3,10 +3,7 @@ use std::error::Error;
 use std::io::{prelude::*, ErrorKind};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
-
-/*type ClientConnected = fn(param:str,param1:bool);
-type ClientDisconnected = fn(param:str,param1:bool);
-type DataReceived = fn(param:str,param1:vec,param2:bool);*/
+use std::sync::mpsc::{channel, Sender};
 
 type SocketData = (u64, TcpStream);
 type EventSender = Arc<Mutex<Option<Sender<ServerEvent>>>>;
@@ -22,6 +19,7 @@ struct ClientData {
     stream: TcpStream,
 }
 
+#[derive(Clone)]
 struct TcpServer<T: Clone + Send + 'static> {
     receive_buffer_size: u16,
     listener_ip: String,
@@ -33,9 +31,9 @@ struct TcpServer<T: Clone + Send + 'static> {
     event_sender: EventSender,
 }
 
-impl TcpServer {
+impl<T> TcpServer<T> where T: Clone + Send + 'static {
     fn new(ip: &str, port: u16, listener: TcpListener) -> Self {
-        Self {
+        TcpServer::<T> {
             receive_buffer_size: 4096,
             listener_ip: ip.to_string(),
             port: port,
@@ -43,6 +41,7 @@ impl TcpServer {
             listener: listener,
             running: false,
             logging: true,
+            event_sender: todo!(),
         }
     }
 
@@ -59,7 +58,7 @@ impl TcpServer {
     }
 
     fn start(&self) {
-        if (self.running) {
+        if self.running {
             println!("server is running");
             return;
         }
@@ -82,7 +81,7 @@ impl TcpServer {
         client.stream.flush();
     }
 
-    fn Log(&self, msg: &str) {
+    fn log(&self, msg: &str) {
         if self.logging {
             println!("{}", msg);
         }
@@ -94,7 +93,7 @@ impl TcpServer {
                 let client_data: ClientData = ClientData { tcp_client, stream };
 
                 self.add_client(client_data.tcp_client.ip().to_string(), client_data);
-                self.Log(
+                self.log(
                     "Connection established. Starting data receiver ["
                         + tcp_client.ip().to_string()
                         + "]",
@@ -131,7 +130,7 @@ impl TcpServer {
             //
         }
         self.remove_client(&client.tcp_client.ip().to_string());
-        self.Log(
+        self.log(
             ("[" + &client.tcp_client.ip().to_string() + "] DataReceiver disconnect detected")
                 .to_string(),
         );
