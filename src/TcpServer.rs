@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::error::Error;
 use std::io::{self, prelude::*, ErrorKind};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Sender};
@@ -32,7 +31,7 @@ pub struct TcpServer<T: Clone + Send + 'static> {
     running: bool,
     logging: bool,
     event_sender: EventSender,
-    handle_type:Option<T>
+    handle_type: Option<T>,
 }
 
 impl<T> TcpServer<T>
@@ -40,9 +39,11 @@ where
     T: Clone + Send + 'static,
 {
     pub fn new(ip: &str, port: u16) -> Self {
+        let mut ip_port: String = ip.to_string();
+        ip_port.push_str(&port.to_string());
         TcpServer::<T> {
             receive_buffer_size: 4096,
-            listener_ip: Arc::new("127.0.0.1:3000".to_string()),
+            listener_ip: Arc::new(ip_port),
             clients: Arc::new(Mutex::new(HashMap::new())),
             running: false,
             logging: true,
@@ -88,16 +89,12 @@ where
         match listener.accept() {
             Ok((stream, tcp_client)) => {
                 let client_data: ClientData = ClientData { tcp_client, stream };
-
                 self.add_client(client_data.tcp_client.ip().to_string(), client_data);
-                self.log(
-                    "Connection established. Starting data receiver ["
-                        + tcp_client.ip().to_string()
-                        + "]",
-                );
-                Ok(())
+                let log_str  = format!("Connection established. Starting data receiver [{}]",tcp_client.ip());
+                self.log(&log_str);
+                //Ok(())
             }
-            None => Err("connection not established"),
+            Err(_) => println!("Error while connecting"),
         }
     }
 
@@ -136,7 +133,8 @@ where
 
         self.send_event(ServerEvent::Disconnection(sock_addr));
 
-        debug!("Removed client {}, at index {}", sock_addr, index);
+        let log_str = format!("Removed client {}, at index {}", sock_addr, index);
+        self.log(&log_str);
         Ok(())
     }
 
@@ -165,9 +163,7 @@ where
             }
         }
         self.remove_client(&client.tcp_client.ip().to_string());
-        self.log(
-            ("[" + &client.tcp_client.ip().to_string() + "] DataReceiver disconnect detected")
-                .to_string(),
-        );
+        let log_str = format!("[{}] DataReceiver disconnect detected",&client.tcp_client.ip().to_string() );
+        self.log(&log_str);
     }
 }
