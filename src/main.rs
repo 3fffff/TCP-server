@@ -1,7 +1,11 @@
-use std::sync::atomic::{AtomicI64, AtomicI32};
+use std::sync::{atomic::AtomicU64, Arc};
 
-mod TcpServer;
+use tcp_server::TcpServer;
+//extern crate TcpServer;
+mod tcp_server;
+
+type AtomicInteger = Arc<AtomicU64>;
 
 fn main() {
-    let server = TcpServer::<AtomicI32>::new("localhost",3000);
+    let server = TcpServer::<AtomicInteger>::new("127.0.0.1",3000);
 }
