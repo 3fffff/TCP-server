@@ -91,11 +91,11 @@ where
                         result
                     );
                     self_.log(&log_str);
-                    let func = |slf, client| Self::data_receiver(self, client);
-                    self_.handle_client(client_data, func)
-                    .unwrap_or_else(|e| {
-                        println!("Error in handle_client : {}", e);
-                    });
+                    let mut func = |client| Self::data_receiver(&mut self_, client);
+                    func(&client_data);
+                    /* .unwrap_or_else(|e| {
+                       println!("Error in handle_client : {}", e);
+                    });*/
                 }
                 Err(_) => println!("Error while connecting"),
             }
@@ -161,7 +161,7 @@ where
         }
     }
 
-    fn data_receiver(&mut self, mut client: ClientData, echo_count: Arc<T>) {
+    fn data_receiver(&mut self, mut client: &ClientData) {
         let (addr, socket) = client;
         loop {
             if !self.is_client_connected(&mut client) {
